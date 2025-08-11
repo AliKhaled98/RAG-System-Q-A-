@@ -1,0 +1,244 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text Summarizer & QA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/toastify-js/1.12.0/toastify.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/toastify-js/1.12.0/toastify.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        body {
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .light-mode {
+            background: linear-gradient(to bottom right, #e0f2fe, #e0e7ff);
+            color: #1f2937;
+        }
+        .neumorphic-dark {
+            background: linear-gradient(145deg, #374151, #1f2937);
+            box-shadow: 6px 6px 12px #1a202c, -6px -6px 12px #4b5563;
+            border-radius: 12px;
+        }
+        .light-mode .neumorphic-dark {
+            background: linear-gradient(145deg, #e5e7eb, #d1d5db);
+            box-shadow: 6px 6px 12px #b0b3b8, -6px -6px 12px #ffffff;
+        }
+        .loading-spinner {
+            display: none;
+            border: 4px solid #6b7280;
+            border-top: 4px solid #60a5fa;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-900 to-gray-800 min-h-screen flex items-center justify-center transition-all">
+    <div class="container mx-auto max-w-3xl p-8 neumorphic-dark">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-200">Text Summarizer & QA</h1>
+            <button id="theme-toggle" class="text-gray-400 hover:text-blue-400 transition" aria-label="Toggle theme">
+                <i class="fas fa-sun"></i>
+            </button>
+        </div>
+
+        <!-- File Upload Section -->
+        <div class="mb-10">
+            <h2 class="text-2xl font-semibold text-gray-300 mb-4 flex items-center">
+                <i class="fas fa-file-upload mr-2"></i> Upload Text File
+            </h2>
+            <form id="upload-form" class="flex flex-col gap-4">
+                <input type="file" id="file-input" accept=".txt" class="border border-gray-600 rounded-lg p-3 bg-gray-700 text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500" aria-label="Upload text file">
+                <button type="submit" class="bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition duration-200 flex items-center justify-center">
+                    <i class="fas fa-upload mr-2"></i> Upload & Summarize
+                    <span id="upload-spinner" class="loading-spinner"></span>
+                </button>
+            </form>
+            <div id="summary" class="mt-6 p-6 bg-gray-700 border border-gray-600 rounded-lg text-gray-200 hidden fade-in"></div>
+            <div id="upload-error" class="mt-4 text-red-400 hidden"></div>
+        </div>
+
+        <!-- Question Section -->
+        <div>
+            <h2 class="text-2xl font-semibold text-gray-300 mb-4 flex items-center">
+                <i class="fas fa-question-circle mr-2"></i> Ask a Question
+            </h2>
+            <textarea id="question" rows="5" placeholder="Enter your question about the uploaded text" class="w-full border border-gray-600 rounded-lg p-3 bg-gray-700 text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500" aria-label="Question input"></textarea>
+            <button onclick="askQuestion()" class="mt-4 bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition duration-200 flex items-center justify-center">
+                <i class="fas fa-paper-plane mr-2"></i> Submit Question
+                <span id="question-spinner" class="loading-spinner"></span>
+            </button>
+            <div id="answer" class="mt-6 p-6 bg-gray-700 border border-gray-600 rounded-lg text-gray-200 hidden fade-in"></div>
+            <div id="question-error" class="mt-4 text-red-400 hidden"></div>
+        </div>
+    </div>
+
+    <script>
+        // Theme Toggle
+        const themeToggle = document.getElementById('theme-toggle');
+        themeToggle.addEventListener('click', () => {
+            document.body.classList.toggle('light-mode');
+            const icon = themeToggle.querySelector('i');
+            icon.classList.toggle('fa-sun');
+            icon.classList.toggle('fa-moon');
+        });
+
+        // Toastify Notification
+        function showToast(message, type = 'success') {
+            Toastify({
+                text: message,
+                duration: 3000,
+                gravity: "top",
+                position: "right",
+                backgroundColor: type === 'success' ? "#10b981" : "#ef4444",
+                stopOnFocus: true,
+            }).showToast();
+        }
+
+        // Handle file upload
+        document.getElementById('upload-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('file-input');
+            const uploadSpinner = document.getElementById('upload-spinner');
+            const summaryDiv = document.getElementById('summary');
+            const errorDiv = document.getElementById('upload-error');
+
+            if (!fileInput.files[0]) {
+                errorDiv.textContent = 'Please select a .txt file.';
+                errorDiv.classList.remove('hidden');
+                showToast('Please select a file.', 'error');
+                return;
+            }
+
+            uploadSpinner.style.display = 'inline-block';
+            errorDiv.classList.add('hidden');
+            summaryDiv.classList.add('hidden');
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                uploadSpinner.style.display = 'none';
+
+                if (result.error) {
+                    errorDiv.textContent = result.error;
+                    errorDiv.classList.remove('hidden');
+                    showToast(result.error, 'error');
+                } else {
+                    summaryDiv.textContent = result.summary;
+                    summaryDiv.classList.remove('hidden');
+                    showToast('File uploaded and summarized successfully!', 'success');
+                }
+            } catch (error) {
+                uploadSpinner.style.display = 'none';
+                errorDiv.textContent = 'An error occurred while processing the file.';
+                errorDiv.classList.remove('hidden');
+                showToast('Failed to process file.', 'error');
+            }
+        });
+
+        // Handle question submission
+        async function askQuestion() {
+            const question = document.getElementById('question').value;
+            const questionSpinner = document.getElementById('question-spinner');
+            const answerDiv = document.getElementById('answer');
+            const errorDiv = document.getElementById('question-error');
+
+            if (!question) {
+                errorDiv.textContent = 'Please enter a question.';
+                errorDiv.classList.remove('hidden');
+                showToast('Please enter a question.', 'error');
+                return;
+            }
+
+            questionSpinner.style.display = 'inline-block';
+            errorDiv.classList.add('hidden');
+            answerDiv.classList.add('hidden');
+
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+                const result = await response.json();
+                questionSpinner.style.display = 'none';
+
+                if (result.error) {
+                    errorDiv.textContent = result.error;
+                    errorDiv.classList.remove('hidden');
+                    showToast(result.error, 'error');
+                } else {
+                    answerDiv.textContent = `Answer: ${result.answer} (Confidence: ${result.confidence.toFixed(2)})`;
+                    answerDiv.classList.remove('hidden');
+                    showToast('Question answered successfully!', 'success');
+                }
+            } catch (error) {
+                questionSpinner.style.display = 'none';
+                errorDiv.textContent = 'An error occurred while processing the question.';
+                errorDiv.classList.add('hidden');
+                showToast('Failed to process question.', 'error');
+            }
+        }
+    </script>
+</body>
+</html>
